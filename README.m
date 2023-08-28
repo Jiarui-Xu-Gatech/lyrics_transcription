@@ -1,4 +1,4 @@
-#This repo is for 7100 2023 Fall
+# This repo is for 7100 2023 Fall
 
 set dataset
 evaluation: Word Error Rate (WER)
@@ -7,7 +7,7 @@ set Noise Reprogramming
 set CNN Reprogramming 
 set U-Net Reprogramming
 
-#Timeline:
+# Timeline:
 First & Second Week: set original model
 Third Week: set dataset
 Forth Week: set Noise Reprogramming and train the model
