@@ -1,7 +1,11 @@
 import torch
 from transformers import Speech2TextProcessor, Speech2TextForConditionalGeneration
+from transformers import WhisperProcessor, WhisperForConditionalGeneration
+
 from datasets import load_dataset
 import numpy as np
+import os
+import json
 
 def calculate_wer(reference, hypothesis):
     ref_words = reference.split()
@@ -26,11 +30,14 @@ def calculate_wer(reference, hypothesis):
                 insertion = d[i, j - 1] + 1
                 deletion = d[i - 1, j] + 1
                 d[i, j] = min(substitution, insertion, deletion)
-    wer = d[len(ref_words), len(hyp_words)] / len(ref_words)
-    return wer
+    return d[len(ref_words), len(hyp_words)] , len(ref_words)
+    
 
-model = Speech2TextForConditionalGeneration.from_pretrained("s2t-small-librispeech-asr")
-processor = Speech2TextProcessor.from_pretrained("s2t-small-librispeech-asr")
+#model = Speech2TextForConditionalGeneration.from_pretrained("s2t-small-librispeech-asr")
+#processor = Speech2TextProcessor.from_pretrained("s2t-small-librispeech-asr")
+processor = WhisperProcessor.from_pretrained("openai/whisper-large-v2")
+model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-large-v2")
+model.config.forced_decoder_ids = None
 
 ds = load_dataset(
     "LibriSpeech",
@@ -39,18 +46,58 @@ ds = load_dataset(
 )
 print(ds)
 
-input_features = processor(
-    ds[0]["audio"]["array"],
-    sampling_rate=16_000,
-    return_tensors="pt"
-).input_features  # Batch size 1
+for filename in os.listdir('GBLyrics'):
+    if filename == '101935856_1430128.json':
+        file_path = os.path.join('GBLyrics', filename)
+        # Open and read the JSON file
+        with open(file_path, 'r') as json_file:
+            data = json.load(json_file)
+            break
 
-print(input_features)
+error=0
+total=0
 
-generated_ids = model.generate(input_features=input_features)
+for num in range(20):
+    print(num)
+    print(ds[num])
+    
+    if len(ds[num]["audio"]["array"]) != 0:
+        input_features = processor(
+            ds[num]["audio"]["array"],
+            sampling_rate=16_000,
+            return_tensors="pt"
+        ).input_features  # Batch size 1
+    else:
+        continue
 
-print(generated_ids)
 
-transcription = processor.batch_decode(generated_ids)
 
-print(transcription)
+    generated_ids = model.generate(input_features=input_features)
+
+    print(generated_ids)
+
+    #transcription = processor.batch_decode(generated_ids)
+    transcription = processor.batch_decode(generated_ids, skip_special_tokens=True)
+
+    print(transcription)
+    
+    #new_t = transcription[0].split('</s>')
+    new_t = transcription[0].split('.')
+
+    number_index=ds[num]['audio']['path'].split('.')[0].split('_')[-1]
+    print('index:')
+    print(number_index)
+
+    e,t=calculate_wer(data[int(number_index)-1]['l'], new_t[0])
+    print(data[int(number_index)-1]['l'])
+    print(new_t[0])
+
+    error=error+e
+    total=total+t
+
+    print(error/total)
+    print(error)
+    print(total)
+    
+
+
