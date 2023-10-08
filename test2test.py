@@ -2,10 +2,100 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
+from transformers import AutoTokenizer, AutoModel
 from datasets import load_dataset
 import numpy as np
 import os
 import json
+
+from torch.autograd import Function
+
+#encode and decode
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+model = AutoModel.from_pretrained("bert-base-uncased")
+
+class WerLoss(nn.Module):
+    def __init__(self):
+        super(WerLoss, self).__init__()
+
+    def forward(self, prediction, target):
+        # Calculate WER between prediction and target
+        wer, total_words = calculate_wer(target, prediction)
+
+        # Convert WER to a PyTorch tensor with grad enabled
+        wer_tensor = torch.tensor(wer, dtype=torch.float32, requires_grad=True)
+
+        return wer_tensor
+
+
+def levenshtein_distance(a, b):
+    # Function to calculate Levenshtein distance for strings
+    a=a.squeeze()
+    b=b.squeeze()
+    n = len(a)
+    m = len(b)
+    dp = torch.zeros((n + 1, m + 1), dtype=torch.float32)
+
+    for i in range(n + 1):
+        dp[i][0] = i
+
+    for j in range(m + 1):
+        dp[0][j] = j
+
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            dp[i][j] = min(
+                dp[i - 1][j] + 1,
+                dp[i][j - 1] + 1,
+                dp[i - 1][j - 1] + cost
+            )
+
+    return dp[n][m]
+
+class LevenshteinLoss(Function):
+    @staticmethod
+    def forward(ctx, prediction, target):
+        prediction = tokenizer.encode(prediction, add_special_tokens=True, return_tensors="pt")
+        prediction = torch.tensor(prediction, dtype=torch.float32)
+        target = tokenizer.encode(target, add_special_tokens=True, return_tensors="pt")
+        target = torch.tensor(target, dtype=torch.float32)
+
+        prediction.requires_grad = True  # Set requires_grad to True
+        target.requires_grad = True
+
+        loss = levenshtein_distance(prediction, target)
+        ctx.save_for_backward(prediction, target)
+        return loss
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        prediction, target = ctx.saved_tensors
+        n = len(prediction)
+        m = len(target)
+
+        dp = torch.zeros((n + 1, m + 1), dtype=torch.float32)
+
+        for i in range(n + 1):
+            dp[i][0] = i
+
+        for j in range(m + 1):
+            dp[0][j] = j
+
+        for i in range(1, n + 1):
+            for j in range(1, m + 1):
+                cost = 0 if prediction[i - 1] == target[j - 1] else 1
+                dp[i][j] = min(
+                    dp[i - 1][j] + 1,
+                    dp[i][j - 1] + 1,
+                    dp[i - 1][j - 1] + cost
+                )
+
+        grad_input = grad_output * dp[n][m]  # Gradient for the prediction
+        grad_target = grad_output * dp[n][m]  # Gradient for the target (backward pass only)
+
+        return grad_input, grad_target
+
 
 def calculate_wer(reference, hypothesis):
     ref_words = reference.split()
@@ -81,8 +171,12 @@ combined_model = CombinedModel(cnn_model, whisper_model,forced_decoder_ids)
 
 learning_rate=0.01
 # Define your loss function and optimizer
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(cnn_model.parameters(), lr=learning_rate)  # Adjust learning rate as needed
+#criterion = LevenshteinLoss.apply
+#optimizer = optim.Adam(cnn_model.parameters(), lr=learning_rate)  # Adjust learning rate as needed
+
+criterion = WerLoss()
+optimizer = optim.Adam(cnn_model.parameters(), lr=learning_rate)
+
 
 num_epochs=1
 print_interval=1
@@ -124,8 +218,17 @@ for epoch in range(num_epochs):
 
         # Calculate loss and backpropagate
         loss = e/t  # Adjust labels as needed
-        loss_tensor = torch.tensor(loss, dtype=torch.float32)  # Convert to PyTorch tensor
-        loss_tensor.backward()
+        print(e/t)
+        #loss_tensor = torch.tensor(loss, dtype=torch.float32)  # Convert to PyTorch tensor
+
+
+        #loss_tensor = criterion(new_t[0], data[int(number_index)-1]['l'])
+        #loss_tensor.backward()
+        #optimizer.step()
+
+        loss = criterion(new_t[0], data[int(number_index)-1]['l'])
+        optimizer.zero_grad()
+        loss.backward()
         optimizer.step()
 
         # Print training statistics (optional)
